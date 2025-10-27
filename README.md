@@ -24,3 +24,23 @@ npm run install-all
 ```bash
 npm run dev
 ```
+
+## Available Scripts
+`npm run dev` - Start both client and server in development mode
+
+`npm run server` - Start only the backend server
+
+`npm run client` - Start only the frontend development server
+
+`npm run build` - Build the frontend for production
+
+`npm run install-all` - Install all dependencies (root, server, client)
+
+`npm run db:studio` - Open Prisma Studio for database management
+
+## Database Management
+
+View and edit your database through Prisma Studio:
+```bash
+npm run db:studio
+```
