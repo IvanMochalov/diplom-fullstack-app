@@ -10,12 +10,61 @@ const prisma = new PrismaClient();
 app.use(cors());
 app.use(express.json());
 
+// Функция для генерации случайных температурных данных за вчерашний день
+const generateYesterdayData = async () => {
+    try {
+        // Проверяем, есть ли уже данные за вчера
+        const yesterday = new Date();
+        yesterday.setDate(yesterday.getDate() - 1);
+        yesterday.setHours(0, 0, 0, 0);
+
+        const existingData = await prisma.temperature.findFirst({
+            where: {
+                timestamp: {
+                    gte: yesterday
+                }
+            }
+        });
+
+        // Если данных нет - генерируем
+        if (!existingData) {
+            console.log('🌡️ Generating temperature data for yesterday...');
+
+            const temperatures = [];
+            const startTime = new Date(yesterday);
+
+            // Генерируем данные за каждую минуту вчерашнего дня
+            for (let minute = 0; minute < 24 * 60; minute++) {
+                const timestamp = new Date(startTime);
+                timestamp.setMinutes(minute);
+
+                // Случайная температура от 40 до 60 градусов
+                const temperatureValue = 40 + Math.random() * 20;
+
+                temperatures.push({
+                    value: parseFloat(temperatureValue.toFixed(1)),
+                    timestamp: timestamp
+                });
+            }
+
+            // Сохраняем все данные разом
+            await prisma.temperature.createMany({
+                data: temperatures
+            });
+
+            console.log(`✅ Generated ${temperatures.length} temperature records`);
+        }
+    } catch (error) {
+        console.error('Error generating temperature data:', error);
+    }
+};
+
 // Инициализация базы данных
 const initializeDatabase = async () => {
     try {
-        // Синхронизируем схему с БД
         await prisma.$executeRaw`PRAGMA foreign_keys = ON`;
-        console.log('✅ SQLite database initialized');
+        await generateYesterdayData();
+        console.log('✅ SQLite database initialized with temperature data');
     } catch (error) {
         console.error('❌ Database initialization error:', error);
     }
@@ -23,130 +72,114 @@ const initializeDatabase = async () => {
 
 // API Routes
 
-// GET - получить всех пользователей
-app.get('/api/users', async (req, res) => {
+// GET - получить температуру за конкретный день
+app.get('/api/temperatures/:date', async (req, res) => {
     try {
-        const users = await prisma.user.findMany({
-            include: {
-                posts: true
+        const { date } = req.params; // формат: YYYY-MM-DD
+
+        // Создаем диапазон дат для запроса
+        const startDate = new Date(date + 'T00:00:00');
+        const endDate = new Date(date + 'T23:59:59');
+
+        const temperatures = await prisma.temperature.findMany({
+            where: {
+                timestamp: {
+                    gte: startDate,
+                    lte: endDate
+                }
             },
             orderBy: {
-                createdAt: 'desc'
+                timestamp: 'asc'
             }
         });
-        res.json(users);
-    } catch (error) {
-        console.error('Error fetching users:', error);
-        res.status(500).json({ error: 'Database error' });
-    }
-});
 
-// GET - получить пользователя по ID
-app.get('/api/users/:id', async (req, res) => {
-    try {
-        const { id } = req.params;
-        const user = await prisma.user.findUnique({
-            where: { id: parseInt(id) },
-            include: { posts: true }
+        res.json({
+            date: date,
+            count: temperatures.length,
+            data: temperatures
         });
 
-        if (!user) {
-            return res.status(404).json({ error: 'User not found' });
-        }
-
-        res.json(user);
     } catch (error) {
-        console.error('Error fetching user:', error);
+        console.error('Error fetching temperatures:', error);
         res.status(500).json({ error: 'Database error' });
     }
 });
 
-// POST - создать пользователя
-app.post('/api/users', async (req, res) => {
+// GET - получить последние N записей температуры
+app.get('/api/temperatures', async (req, res) => {
     try {
-        const { name, email } = req.body;
+        const limit = parseInt(req.query.limit) || 100;
 
-        if (!name || !email) {
-            return res.status(400).json({ error: 'Name and email are required' });
+        const temperatures = await prisma.temperature.findMany({
+            orderBy: {
+                timestamp: 'desc'
+            },
+            take: limit
+        });
+
+        res.json(temperatures.reverse()); // возвращаем в хронологическом порядке
+    } catch (error) {
+        console.error('Error fetching temperatures:', error);
+        res.status(500).json({ error: 'Database error' });
+    }
+});
+
+// POST - добавить новое измерение температуры
+app.post('/api/temperatures', async (req, res) => {
+    try {
+        const { value } = req.body;
+
+        if (value === undefined) {
+            return res.status(400).json({ error: 'Temperature value is required' });
         }
 
-        const user = await prisma.user.create({
+        const temperature = await prisma.temperature.create({
             data: {
-                name,
-                email
+                value: parseFloat(value)
             }
         });
 
-        res.status(201).json(user);
+        res.status(201).json(temperature);
     } catch (error) {
-        if (error.code === 'P2002') {
-            return res.status(400).json({ error: 'Email already exists' });
-        }
-        console.error('Error creating user:', error);
+        console.error('Error creating temperature record:', error);
         res.status(500).json({ error: 'Database error' });
     }
 });
 
-// POST - создать пост для пользователя
-app.post('/api/users/:userId/posts', async (req, res) => {
+// GET - получить статистику за день
+app.get('/api/stats/:date', async (req, res) => {
     try {
-        const { userId } = req.params;
-        const { title, content } = req.body;
+        const { date } = req.params;
+        const startDate = new Date(date + 'T00:00:00');
+        const endDate = new Date(date + 'T23:59:59');
 
-        const post = await prisma.post.create({
-            data: {
-                title,
-                content,
-                authorId: parseInt(userId)
+        const temperatures = await prisma.temperature.findMany({
+            where: {
+                timestamp: {
+                    gte: startDate,
+                    lte: endDate
+                }
             }
         });
 
-        res.status(201).json(post);
-    } catch (error) {
-        console.error('Error creating post:', error);
-        res.status(500).json({ error: 'Database error' });
-    }
-});
-
-// PUT - обновить пользователя
-app.put('/api/users/:id', async (req, res) => {
-    try {
-        const { id } = req.params;
-        const { name, email } = req.body;
-
-        const user = await prisma.user.update({
-            where: { id: parseInt(id) },
-            data: {
-                name,
-                email
-            }
-        });
-
-        res.json(user);
-    } catch (error) {
-        if (error.code === 'P2025') {
-            return res.status(404).json({ error: 'User not found' });
+        if (temperatures.length === 0) {
+            return res.status(404).json({ error: 'No data for this date' });
         }
-        console.error('Error updating user:', error);
-        res.status(500).json({ error: 'Database error' });
-    }
-});
 
-// DELETE - удалить пользователя
-app.delete('/api/users/:id', async (req, res) => {
-    try {
-        const { id } = req.params;
+        const values = temperatures.map(t => t.value);
+        const stats = {
+            date: date,
+            count: temperatures.length,
+            average: parseFloat((values.reduce((a, b) => a + b, 0) / values.length).toFixed(1)),
+            min: Math.min(...values),
+            max: Math.max(...values),
+            firstRecord: temperatures[0],
+            lastRecord: temperatures[temperatures.length - 1]
+        };
 
-        await prisma.user.delete({
-            where: { id: parseInt(id) }
-        });
-
-        res.json({ message: 'User deleted successfully' });
+        res.json(stats);
     } catch (error) {
-        if (error.code === 'P2025') {
-            return res.status(404).json({ error: 'User not found' });
-        }
-        console.error('Error deleting user:', error);
+        console.error('Error calculating stats:', error);
         res.status(500).json({ error: 'Database error' });
     }
 });
@@ -155,7 +188,7 @@ app.delete('/api/users/:id', async (req, res) => {
 app.listen(PORT, async () => {
     await initializeDatabase();
     console.log(`🚀 Server running on http://localhost:${PORT}`);
-    console.log(`📊 SQLite database ready`);
+    console.log(`🌡️ Temperature monitoring app ready`);
 });
 
 // Graceful shutdown
